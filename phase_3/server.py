@@ -1,96 +1,88 @@
 import socket
 import threading
 
-#creating the server socket IPV4 (AF_INET) and TCP (SOCK_STREAM)
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-#bind the sever to your computer ip and a desired port
-server_socket.bind((socket.gethostbyname(socket.gethostname()), 12345))
+class ChatServer:
+    def __init__(self, host, port):
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.bind((host, port))
+        self.server_socket.listen()
+        self.clients = {}
+        print(f"\n{'*' * 30}")
+        print("Server is running and waiting for connections...")
+        print(f"{'*' * 30}\n")
 
-# put it on listen (for incoming connection)
-server_socket.listen()
+    def broadcast(self, message, sender=None):
+        """Send message to all clients except the sender"""
+        for client_socket in self.clients.keys():
+            if client_socket != sender:
+                try:
+                    client_socket.send(message.encode("utf-8"))
+                except:
+                    self.remove_client(client_socket)
 
-#a dictionary for clients
-clients = dict()
-
-
-def broadcast(message):
-    """show the messages for everyone"""
-    for client in clients.keys():
-        client.send(message)
-
-
-def receive_message(client_socket):
-    """receive message from client"""
-
-    while True:
-        address = str(client_socket)[-26:-3]
-        # we need a try except so that our program doesn't crash
-        try:
-            #receive the message from the client
-            message = client_socket.recv(1024).decode("utf-8")
-            if message.lower() == "/exit":
-                raise Exception
-            message = f"\033[1;34m\n\t{clients[client_socket]} ({address}): {message}\n\033[0m".encode("utf-8")
-            #show the message to everyone
-            broadcast(message)
-        except:
-            #name of client
-            name = clients[client_socket]
-            #remove the client from the dictionary
-            clients.pop(client_socket)
-            #close the connection for the client
+    def remove_client(self, client_socket):
+        """Remove a client from the server"""
+        if client_socket in self.clients:
+            name = self.clients[client_socket]
+            address = client_socket.getpeername()
+            del self.clients[client_socket]
             client_socket.close()
-            #let others know that the client left the server
-            broadcast(f"\033[1;31m\n\t{name} ({address}) has left the server!\n\033[0m".encode("utf-8"))
-            print(f"{name} ({address}) has left the server.")
-            print("*" * 30)
-            break
+            leave_msg = f"\033[1;31m\n\t{name} ({address[0]}:{address[1]}) has left the server!\n\033[0m"
+            self.broadcast(leave_msg)
+            print(f"{name} ({address[0]}:{address[1]}) has left the server.")
+            print(f"{'*' * 30}")
 
-
-def connect_client():
-    """connecting to server"""
-    while True:
-
-        #accept incoming connections
-        client_socket, client_address = server_socket.accept()
-        print(f"{client_address} has connected.")
-        print("*" * 30)
-
+    def handle_client(self, client_socket):
+        """Handle communication with a client"""
         try:
+            # Get client name
+            client_socket.send("username".encode('utf-8'))
+            client_name = client_socket.recv(1024).decode('utf-8').strip()
 
-            #request for client name
-            client_socket.send(f"username".encode('utf-8'))
-            client_name = client_socket.recv(1024).decode('utf-8')
+            if not client_name:
+                raise ValueError("Empty username")
 
-            #adding the client to dictionary
-            if len(client_name) != 0:
+            address = client_socket.getpeername()
+            self.clients[client_socket] = client_name
+            print(f"Client: {client_name} ({address[0]}:{address[1]})")
+            print(f"{'*' * 30}")
 
-                clients.update({client_socket: client_name})
-                print(f"client: {clients[client_socket]} {str(client_socket)[-27:-1]}")
-                print("*" * 30)
+            welcome_msg = f"\nWelcome {client_name}, you are connected to the server.\n"
+            client_socket.send(welcome_msg.encode('utf-8'))
 
-                #informing the client
-                client_socket.send(f"\nwelcome {clients[client_socket]}, you are connected to the server.\n".encode('utf-8'))
-                broadcast(f"\033[1;92m\n{clients[client_socket]} has joined the server.\n\033[0m".encode("utf-8"))
-            else:
-                raise Exception
+            join_msg = f"\033[1;92m\n{client_name} has joined the server.\n\033[0m"
+            self.broadcast(join_msg, client_socket)
 
-        except:
+            # Handle messages from client
+            while True:
+                message = client_socket.recv(1024).decode("utf-8")
+                if not message or message.lower() == "/exit":
+                    raise Exception("Client disconnected")
 
-            print(f"({str(client_socket)[-25:-2]}) has left the server.")
-            print("*" * 30)
-            continue
+                formatted_msg = f"\033[1;34m\n\t{client_name} ({address[0]}:{address[1]}): {message}\n\033[0m"
+                self.broadcast(formatted_msg, client_socket)
 
-        #when a client connects to the server stat a thread
-        receive_thread = threading.Thread(target=receive_message, args=(client_socket,))
-        receive_thread.start()
+        except Exception as e:
+            self.remove_client(client_socket)
+
+    def start(self):
+        """Start accepting client connections"""
+        while True:
+            client_socket, client_address = self.server_socket.accept()
+            print(f"New connection from {client_address[0]}:{client_address[1]}")
+            print(f"{'*' * 30}")
+
+            client_thread = threading.Thread(
+                target=self.handle_client,
+                args=(client_socket,),
+                daemon=True
+            )
+            client_thread.start()
 
 
-#set up the server
-print()
-print("*" * 30)
-print("server is looking for connection...")
-print("*" * 30)
-connect_client()
-
+if __name__ == "__main__":
+    HOST = socket.gethostbyname(socket.gethostname())
+    PORT = 12345
+    server = ChatServer(HOST, PORT)
+    server.start()
